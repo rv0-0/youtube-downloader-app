@@ -11,14 +11,20 @@ import sys
 import subprocess
 import signal
 import os
+import time
+import traceback
+from pathlib import Path
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     print("Warning: psutil not available. Process termination may be limited.")
     PSUTIL_AVAILABLE = False
-import time
-from pathlib import Path
+try:
+    import yt_dlp
+except ImportError:
+    print("Error: yt-dlp not installed. Please run: pip install -r requirements.txt")
+    sys.exit(1)
 
 # Import our YouTube downloader
 from youtube_downloader import YouTubeDownloader
@@ -27,8 +33,12 @@ from youtube_downloader import YouTubeDownloader
 class YouTubeDownloaderGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("YouTube Downloader - Enhanced")
-        self.root.geometry("900x700")
+        self.root.title("YouTube Downloader")
+        self.root.geometry("800x650")  # More compact size
+        self.root.minsize(700, 500)  # Minimum size
+        
+        # Configure window style
+        self.root.configure(bg='#f8f9fa')
         
         # Queue for thread communication
         self.message_queue = queue.Queue()
@@ -63,64 +73,70 @@ class YouTubeDownloaderGUI:
         self.update_messages()
     
     def setup_ui(self):
-        """Setup the user interface"""
-        # Main frame with scrollable content
-        main_canvas = tk.Canvas(self.root)
-        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=main_canvas.yview)
-        scrollable_frame = ttk.Frame(main_canvas)
+        """Setup the user interface - Clean and compact design"""
+        # Configure main window style
+        self.root.configure(bg='#f0f0f0')
         
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
-        )
+        # Create main container with padding
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill="both", expand=True, padx=8, pady=8)
         
-        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        main_canvas.configure(yscrollcommand=scrollbar.set)
+        # Configure grid weights for responsive design
+        main_container.columnconfigure(0, weight=1)
+        main_container.rowconfigure(6, weight=1)  # Video progress area
+        main_container.rowconfigure(7, weight=1)  # Log area
         
-        main_frame = ttk.Frame(scrollable_frame, padding="10")
-        main_frame.pack(fill="both", expand=True)
+        # Title - more compact
+        title_label = ttk.Label(main_container, text="🎬 YouTube Downloader", 
+                               font=("Segoe UI", 14, "bold"))
+        title_label.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        # Configure grid weights
-        main_frame.columnconfigure(1, weight=1)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="🎬 YouTube Downloader - Enhanced", 
-                               font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        # Top panel - Settings in a compact horizontal layout
+        settings_panel = ttk.Frame(main_container)
+        settings_panel.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        settings_panel.columnconfigure(1, weight=1)
         
-        # Download path selection
-        path_frame = ttk.LabelFrame(main_frame, text="Download Location", padding="5")
-        path_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        path_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(path_frame, text="Path:").grid(row=0, column=0, sticky=tk.W)
+        # Download path - more compact
+        ttk.Label(settings_panel, text="📁 Path:").grid(row=0, column=0, sticky=tk.W)
         self.path_var = tk.StringVar(value=self.download_path)
-        path_entry = ttk.Entry(path_frame, textvariable=self.path_var, state="readonly")
+        path_entry = ttk.Entry(settings_panel, textvariable=self.path_var, state="readonly", width=40)
         path_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        
-        browse_button = ttk.Button(path_frame, text="Browse", command=self.browse_folder)
+        browse_button = ttk.Button(settings_panel, text="Browse", command=self.browse_folder, width=8)
         browse_button.grid(row=0, column=2, sticky=tk.W)
         
-        # Quality selection
-        quality_frame = ttk.LabelFrame(main_frame, text="Video Quality", padding="5")
-        quality_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        quality_frame.columnconfigure(1, weight=1)
+        # Quality and subtitle options in same row
+        options_panel = ttk.Frame(main_container)
+        options_panel.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+        options_panel.columnconfigure(1, weight=1)
         
-        ttk.Label(quality_frame, text="Quality:").grid(row=0, column=0, sticky=tk.W)
+        # Quality selection - compact
+        ttk.Label(options_panel, text="🎥 Quality:").grid(row=0, column=0, sticky=tk.W)
         self.quality_var = tk.StringVar(value="Best Quality (4K/1440p/1080p)")
-        quality_combo = ttk.Combobox(quality_frame, textvariable=self.quality_var, 
+        quality_combo = ttk.Combobox(options_panel, textvariable=self.quality_var, 
                                    values=list(self.quality_options.keys()), 
-                                   state="readonly", width=35)
-        quality_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
+                                   state="readonly", width=25)
+        quality_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 15))
         quality_combo.bind('<<ComboboxSelected>>', self.on_quality_change)
         
+        # Subtitle options - compact checkboxes
+        self.download_subtitles_var = tk.BooleanVar(value=True)
+        subtitle_check = ttk.Checkbutton(options_panel, text="📝 Subtitles", 
+                                        variable=self.download_subtitles_var)
+        subtitle_check.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+        
+        self.embed_subtitles_var = tk.BooleanVar(value=False)
+        embed_check = ttk.Checkbutton(options_panel, text="📎 Embed", 
+                                     variable=self.embed_subtitles_var)
+        embed_check.grid(row=0, column=3, sticky=tk.W)
+        
         # Custom format entry (initially hidden)
-        self.custom_format_frame = ttk.Frame(quality_frame)
-        self.custom_format_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.custom_format_frame = ttk.Frame(main_container)
+        self.custom_format_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         self.custom_format_frame.columnconfigure(1, weight=1)
         
-        ttk.Label(self.custom_format_frame, text="Custom Format:").grid(row=0, column=0, sticky=tk.W)
-        self.custom_format_var = tk.StringVar(value="bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
+        ttk.Label(self.custom_format_frame, text="⚙️ Custom:").grid(row=0, column=0, sticky=tk.W)
+        self.custom_format_var = tk.StringVar(value="bv*+ba/b")
         self.custom_format_entry = ttk.Entry(self.custom_format_frame, textvariable=self.custom_format_var)
         self.custom_format_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
         
@@ -131,121 +147,104 @@ class YouTubeDownloaderGUI:
         # Hide custom format initially
         self.custom_format_frame.grid_remove()
         
-        # Subtitle options
-        subtitle_frame = ttk.LabelFrame(main_frame, text="Subtitle Options", padding="5")
-        subtitle_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        subtitle_frame.columnconfigure(1, weight=1)
         
-        self.download_subtitles_var = tk.BooleanVar(value=True)
-        subtitle_check = ttk.Checkbutton(subtitle_frame, text="Download English subtitles", 
-                                        variable=self.download_subtitles_var)
-        subtitle_check.grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
+        # URLs input - more compact
+        urls_panel = ttk.LabelFrame(main_container, text="🔗 YouTube URLs", padding="8")
+        urls_panel.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
+        urls_panel.columnconfigure(0, weight=1)
+        urls_panel.rowconfigure(0, weight=1)
         
-        self.embed_subtitles_var = tk.BooleanVar(value=False)
-        embed_check = ttk.Checkbutton(subtitle_frame, text="Embed subtitles in video", 
-                                     variable=self.embed_subtitles_var)
-        embed_check.grid(row=0, column=1, sticky=tk.W)
+        self.urls_text = scrolledtext.ScrolledText(urls_panel, height=4, width=50, 
+                                                  font=("Consolas", 9))
+        self.urls_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # URLs input
-        urls_frame = ttk.LabelFrame(main_frame, text="YouTube URLs", padding="5")
-        urls_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        urls_frame.columnconfigure(0, weight=1)
-        urls_frame.rowconfigure(1, weight=1)
+        # Buttons - horizontal layout, more compact
+        buttons_panel = ttk.Frame(main_container)
+        buttons_panel.grid(row=5, column=0, pady=(0, 8))
         
-        ttk.Label(urls_frame, text="Enter YouTube URLs (one per line):").grid(row=0, column=0, sticky=tk.W)
+        self.download_button = ttk.Button(buttons_panel, text="🚀 Start Download", 
+                                         command=self.start_download, width=15)
+        self.download_button.pack(side=tk.LEFT, padx=(0, 8))
         
-        self.urls_text = scrolledtext.ScrolledText(urls_frame, height=6, width=60)
-        self.urls_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(5, 0))
+        self.stop_button = ttk.Button(buttons_panel, text="⏹️ Stop", 
+                                     command=self.stop_download, state="disabled", width=10)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 8))
         
-        # Buttons frame
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=5, column=0, columnspan=3, pady=(0, 10))
+        clear_button = ttk.Button(buttons_panel, text="🗑️ Clear", 
+                                 command=self.clear_urls, width=10)
+        clear_button.pack(side=tk.LEFT)
         
-        self.download_button = ttk.Button(buttons_frame, text="Start Download", 
-                                         command=self.start_download)
-        self.download_button.pack(side=tk.LEFT, padx=(0, 10))
         
-        clear_button = ttk.Button(buttons_frame, text="Clear URLs", 
-                                 command=self.clear_urls)
-        clear_button.pack(side=tk.LEFT, padx=(0, 10))
+        # Progress section - compact design
+        progress_panel = ttk.LabelFrame(main_container, text="📊 Progress", padding="8")
+        progress_panel.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
+        progress_panel.columnconfigure(0, weight=1)
+        progress_panel.rowconfigure(2, weight=1)
         
-        self.stop_button = ttk.Button(buttons_frame, text="Stop", 
-                                     command=self.stop_download, state="disabled")
-        self.stop_button.pack(side=tk.LEFT)
+        # Overall progress - compact
+        overall_frame = ttk.Frame(progress_panel)
+        overall_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+        overall_frame.columnconfigure(1, weight=1)
         
-        # Overall Progress frame
-        overall_progress_frame = ttk.LabelFrame(main_frame, text="Overall Progress", padding="5")
-        overall_progress_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        overall_progress_frame.columnconfigure(0, weight=1)
-        
+        ttk.Label(overall_frame, text="Overall:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W)
         self.overall_progress_var = tk.StringVar(value="Ready")
-        overall_progress_label = ttk.Label(overall_progress_frame, textvariable=self.overall_progress_var)
-        overall_progress_label.grid(row=0, column=0, sticky=tk.W)
+        overall_label = ttk.Label(overall_frame, textvariable=self.overall_progress_var, 
+                                 font=("Segoe UI", 9))
+        overall_label.grid(row=0, column=1, sticky=tk.W, padx=(8, 0))
         
-        self.overall_progress_bar = ttk.Progressbar(overall_progress_frame, mode='determinate')
-        self.overall_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.overall_progress_bar = ttk.Progressbar(progress_panel, mode='determinate')
+        self.overall_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         
-        # Current Video Progress frame
-        current_progress_frame = ttk.LabelFrame(main_frame, text="Current Video Progress", padding="5")
-        current_progress_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        current_progress_frame.columnconfigure(0, weight=1)
+        # Video progress treeview - more compact
+        columns = ("Index", "Title", "Status", "Progress")
+        self.videos_tree = ttk.Treeview(progress_panel, columns=columns, show="headings", height=6)
         
-        self.current_progress_var = tk.StringVar(value="No active download")
-        current_progress_label = ttk.Label(current_progress_frame, textvariable=self.current_progress_var)
-        current_progress_label.grid(row=0, column=0, sticky=tk.W)
-        
-        self.current_progress_bar = ttk.Progressbar(current_progress_frame, mode='determinate')
-        self.current_progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
-        
-        # Individual Videos Progress frame
-        videos_progress_frame = ttk.LabelFrame(main_frame, text="Individual Videos", padding="5")
-        videos_progress_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        videos_progress_frame.columnconfigure(0, weight=1)
-        videos_progress_frame.rowconfigure(0, weight=1)
-        
-        # Create treeview for video progress
-        columns = ("Index", "Title", "Status", "Progress", "Quality")
-        self.videos_tree = ttk.Treeview(videos_progress_frame, columns=columns, show="headings", height=8)
-        
-        # Configure column headings
+        # Configure column headings and widths
         self.videos_tree.heading("Index", text="#")
         self.videos_tree.heading("Title", text="Video Title")
         self.videos_tree.heading("Status", text="Status")
         self.videos_tree.heading("Progress", text="Progress")
-        self.videos_tree.heading("Quality", text="Quality")
         
-        # Configure column widths
-        self.videos_tree.column("Index", width=50, anchor="center")
+        self.videos_tree.column("Index", width=40, anchor="center")
         self.videos_tree.column("Title", width=300)
         self.videos_tree.column("Status", width=100, anchor="center")
-        self.videos_tree.column("Progress", width=100, anchor="center")
-        self.videos_tree.column("Quality", width=120, anchor="center")
+        self.videos_tree.column("Progress", width=80, anchor="center")
         
-        # Add scrollbars for treeview
-        tree_scrollbar_y = ttk.Scrollbar(videos_progress_frame, orient="vertical", command=self.videos_tree.yview)
-        tree_scrollbar_x = ttk.Scrollbar(videos_progress_frame, orient="horizontal", command=self.videos_tree.xview)
-        self.videos_tree.configure(yscrollcommand=tree_scrollbar_y.set, xscrollcommand=tree_scrollbar_x.set)
+        # Treeview with scrollbar
+        tree_frame = ttk.Frame(progress_panel)
+        tree_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
         
-        self.videos_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        tree_scrollbar_y.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        tree_scrollbar_x.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.videos_tree.grid(row=0, column=0, in_=tree_frame, sticky=(tk.W, tk.E, tk.N, tk.S))
+        tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.videos_tree.yview)
+        tree_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.videos_tree.configure(yscrollcommand=tree_scrollbar.set)
         
-        # Log frame
-        log_frame = ttk.LabelFrame(main_frame, text="Download Log", padding="5")
-        log_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, width=60)
+        # Log section - compact and clean
+        log_panel = ttk.LabelFrame(main_container, text="📝 Download Log", padding="8")
+        log_panel.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 0))
+        log_panel.columnconfigure(0, weight=1)
+        log_panel.rowconfigure(0, weight=1)
+        
+        self.log_text = scrolledtext.ScrolledText(log_panel, height=6, width=50, 
+                                                 font=("Consolas", 8), wrap=tk.WORD)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configure row weights for proper expansion
-        main_frame.rowconfigure(8, weight=1)
-        main_frame.rowconfigure(9, weight=1)
+        # Add current progress display in the progress panel
+        current_frame = ttk.Frame(progress_panel)
+        current_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(4, 0))
+        current_frame.columnconfigure(1, weight=1)
         
-        # Pack canvas and scrollbar
-        main_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        ttk.Label(current_frame, text="Current:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W)
+        self.current_progress_var = tk.StringVar(value="No active download")
+        current_label = ttk.Label(current_frame, textvariable=self.current_progress_var, 
+                                 font=("Segoe UI", 9))
+        current_label.grid(row=0, column=1, sticky=tk.W, padx=(8, 0))
+        
+        self.current_progress_bar = ttk.Progressbar(progress_panel, mode='determinate')
+        self.current_progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(2, 0))
     
     def on_quality_change(self, event=None):
         """Handle quality selection change"""
@@ -256,32 +255,27 @@ class YouTubeDownloaderGUI:
     
     def show_format_help(self):
         """Show help dialog for custom format"""
-        help_text = """Custom Format Examples:
+        help_text = """🎥 Custom Format Examples:
 
-🏆 BEST QUALITY FORMATS (With FFmpeg installed):
-• bv*+ba/b - Best video + best audio (recommended, auto-fallback)
-• bv*[ext=mp4]+ba[ext=m4a]/b - Best MP4 video + M4A audio
-• bv*[vcodec^=vp9]+ba[acodec^=opus]/bv*+ba - VP9 video + Opus audio (premium)
-• bv*[vcodec^=av01]+ba[acodec^=opus]/bv*+ba - AV1 video + Opus audio (ultra)
+🏆 BEST QUALITY (With FFmpeg):
+• bv*+ba/b - Best video + audio (recommended)
+• bv*[ext=mp4]+ba[ext=m4a]/b - MP4 video + M4A audio
+• bv*[vcodec^=vp9]+ba[acodec^=opus]/bv*+ba - VP9 + Opus
 
-📺 RESOLUTION SPECIFIC:
-• bv*[height<=1080]+ba/b[height<=1080] - Best up to 1080p with audio
-• bv*[height<=720]+ba/b[height<=720] - Best up to 720p with audio
-• b[height<=1080] - Single file up to 1080p
+📺 RESOLUTION LIMITS:
+• bv*[height<=1080]+ba/b[height<=1080] - Max 1080p
+• bv*[height<=720]+ba/b[height<=720] - Max 720p
 
 🎵 AUDIO ONLY:
-• ba[ext=m4a]/ba - Best M4A audio (fallback to any)
-• ba[ext=mp3]/ba - Best MP3 audio (fallback to any)
+• ba[ext=m4a]/ba - M4A audio
+• ba[ext=mp3]/ba - MP3 audio
 
 ⚙️ ADVANCED:
-• b[ext=mp4] - Best MP4 format only
-• bv*[vcodec^=avc1]+ba/b - H.264 video + best audio
-• worst - Lowest quality (for testing)
+• bv*[vcodec^=av01]+ba[acodec^=opus] - AV1 + Opus
+• worst - Lowest quality (testing)
 
-💡 NEW: Updated format strings use 'bv*+ba' for better quality merging!
-📦 FFmpeg is now installed - high quality video+audio merging available!
-
-See yt-dlp documentation for more format options."""
+💡 'bv*+ba' = Best video + best audio with automatic fallback
+📦 FFmpeg installed - high quality merging available!"""
         
         messagebox.showinfo("Format Help", help_text)
     
@@ -317,12 +311,14 @@ See yt-dlp documentation for more format options."""
         # as it may not be updated yet when playlist videos are being added
         display_index = str(index) if isinstance(index, str) else f"{index}"
         
+        # Compact display with shorter title
+        display_title = title[:40] + "..." if len(title) > 40 else title
+        
         item_id = self.videos_tree.insert("", "end", values=(
             display_index,
-            title[:50] + "..." if len(title) > 50 else title,
+            display_title,
             "Pending",
-            "0%",
-            "Detecting..."
+            "0%"
         ))
         
         self.video_progress[url] = {
@@ -412,9 +408,9 @@ See yt-dlp documentation for more format options."""
             current_values = list(self.videos_tree.item(item_id)["values"])
             print(f"[GUI DEBUG] Current tree values: {current_values}")
             
-            # Update values
+            # Update values for compact format (4 columns instead of 5)
             if title:
-                current_values[1] = title[:50] + "..." if len(title) > 50 else title
+                current_values[1] = title[:40] + "..." if len(title) > 40 else title
             if status:
                 current_values[2] = status
             if progress is not None:
@@ -422,8 +418,7 @@ See yt-dlp documentation for more format options."""
                     current_values[3] = f"{progress:.1f}%"
                 else:
                     current_values[3] = str(progress)
-            if quality:
-                current_values[4] = quality
+            # Removed quality column for compact design
                 
             print(f"[GUI DEBUG] New tree values: {current_values}")
             self.videos_tree.item(item_id, values=current_values)
@@ -449,7 +444,10 @@ See yt-dlp documentation for more format options."""
         if total > 0:
             percentage = (completed / total) * 100
             self.overall_progress_bar["value"] = percentage
-            self.overall_progress_var.set(f"Overall: {completed}/{total} videos completed ({percentage:.1f}%)")
+            
+            # More concise progress display
+            status_emoji = "✅" if completed == total else "⏳"
+            self.overall_progress_var.set(f"{status_emoji} {completed}/{total} ({percentage:.0f}%)")
             
             print(f"[GUI DEBUG] Overall progress updated: {completed}/{total} = {percentage:.1f}%")
     
