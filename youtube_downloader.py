@@ -105,6 +105,16 @@ class YouTubeDownloader:
         
         # Update options
         self._update_subtitle_options()
+    
+    def set_format(self, format_string: str):
+        """
+        Set the download format for both single videos and playlists.
+        
+        Args:
+            format_string (str): yt-dlp format string
+        """
+        self.single_video_opts['format'] = format_string
+        self.playlist_opts['format'] = format_string
         
         print(f"📝 Subtitle settings updated:")
         print(f"   Download subtitles: {self.download_subtitles}")
@@ -154,6 +164,30 @@ class YouTubeDownloader:
         except Exception:
             return False
     
+    def get_info(self, url: str) -> Optional[Dict]:
+        """
+        Extract video/playlist information without downloading.
+        
+        Args:
+            url (str): Video or playlist URL
+            
+        Returns:
+            Optional[Dict]: Video/playlist information or None if failed
+        """
+        try:
+            opts = {
+                'quiet': True,
+                'extract_flat': True,  # For playlists, just get basic info
+                'force_json': True
+            }
+            
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return info
+        except Exception as e:
+            print(f"{Fore.RED}Error extracting info: {e}")
+            return None
+
     def get_playlist_info(self, url: str) -> Optional[Dict]:
         """
         Extract playlist information without downloading.
