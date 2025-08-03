@@ -39,9 +39,9 @@ class YouTubeDownloader:
         self.single_videos_path.mkdir(exist_ok=True)
         self.playlists_path.mkdir(exist_ok=True)
         
-        # Configure yt-dlp options for single videos
+        # Configure yt-dlp options for single videos - Updated for proper audio+video merging
         self.single_video_opts = {
-            'format': 'best[height<=1080]/best',  # Best quality up to 1080p, fallback to best available
+            'format': 'bv*[height<=1080]+ba/b[height<=1080]/b',  # Best video+audio up to 1080p with fallback
             'outtmpl': str(self.single_videos_path / '%(title)s.%(ext)s'),
             'restrictfilenames': True,
             'writesubtitles': self.download_subtitles,
@@ -58,11 +58,15 @@ class YouTubeDownloader:
             'extractor_retries': 3,
             'sleep_interval': 1,
             'max_sleep_interval': 5,
+            # Enhanced merging options
+            'merge_output_format': 'mp4',
+            'prefer_ffmpeg': True,
+            'keepvideo': False,
         }
         
-        # Configure yt-dlp options for playlists
+        # Configure yt-dlp options for playlists - Updated for proper audio+video merging
         self.playlist_opts = {
-            'format': 'best[height<=1080]/best',  # Best quality up to 1080p, fallback to best available
+            'format': 'bv*[height<=1080]+ba/b[height<=1080]/b',  # Best video+audio up to 1080p with fallback
             'restrictfilenames': True,
             'writesubtitles': self.download_subtitles,
             'writeautomaticsub': self.download_subtitles,
@@ -78,6 +82,10 @@ class YouTubeDownloader:
             'extractor_retries': 3,
             'sleep_interval': 1,
             'max_sleep_interval': 5,
+            # Enhanced merging options
+            'merge_output_format': 'mp4',
+            'prefer_ffmpeg': True,
+            'keepvideo': False,
         }
     
     def configure_subtitles(self, download_subtitles: bool = True, embed_subtitles: bool = False, 

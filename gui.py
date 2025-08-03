@@ -8,6 +8,15 @@ from tkinter import ttk, scrolledtext, filedialog, messagebox
 import threading
 import queue
 import sys
+import subprocess
+import signal
+import os
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    print("Warning: psutil not available. Process termination may be limited.")
+    PSUTIL_AVAILABLE = False
 import time
 from pathlib import Path
 
@@ -29,19 +38,24 @@ class YouTubeDownloaderGUI:
         self.download_path = "Downloads"
         self.download_stopped = False  # Flag to track if download was stopped
         
+        # Process tracking for proper termination
+        self.running_processes = []
+        self.download_thread = None
+        
         # Video progress tracking
         self.video_progress = {}
         self.current_video_index = 0
         self.total_videos = 0
         
-        # Quality options - Updated for better quality
+        # Quality options - Updated for proper audio+video merging with ffmpeg
         self.quality_options = {
-            "Best Quality (4K/1440p/1080p)": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-            "High Quality (1080p max)": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-            "Medium Quality (720p max)": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]", 
-            "Low Quality (480p max)": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
-            "Premium Quality (VP9+Opus)": "bestvideo[vcodec^=vp9]+bestaudio[acodec^=opus]/bestvideo+bestaudio/best",
-            "Audio Only (Best)": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+            "Best Quality (4K/1440p/1080p)": "bv*+ba/b",
+            "High Quality (1080p max)": "bv*[height<=1080]+ba/b[height<=1080]",
+            "Medium Quality (720p max)": "bv*[height<=720]+ba/b[height<=720]", 
+            "Low Quality (480p max)": "bv*[height<=480]+ba/b[height<=480]",
+            "Premium Quality (VP9+Opus)": "bv*[vcodec^=vp9]+ba[acodec^=opus]/bv*+ba/b",
+            "Ultra Quality (AV1+Opus)": "bv*[vcodec^=av01]+ba[acodec^=opus]/bv*+ba/b",
+            "Audio Only (Best)": "ba[ext=m4a]/ba[ext=mp3]/ba/b",
             "Custom Format": "custom"
         }
         
@@ -244,26 +258,28 @@ class YouTubeDownloaderGUI:
         """Show help dialog for custom format"""
         help_text = """Custom Format Examples:
 
-🏆 BEST QUALITY FORMATS:
-• bestvideo[ext=mp4]+bestaudio[ext=m4a] - Best MP4 video + M4A audio (recommended)
-• bestvideo+bestaudio - Best video and audio streams merged
-• bestvideo[vcodec^=vp9]+bestaudio[acodec^=opus] - VP9 video + Opus audio (premium quality)
+🏆 BEST QUALITY FORMATS (With FFmpeg installed):
+• bv*+ba/b - Best video + best audio (recommended, auto-fallback)
+• bv*[ext=mp4]+ba[ext=m4a]/b - Best MP4 video + M4A audio
+• bv*[vcodec^=vp9]+ba[acodec^=opus]/bv*+ba - VP9 video + Opus audio (premium)
+• bv*[vcodec^=av01]+ba[acodec^=opus]/bv*+ba - AV1 video + Opus audio (ultra)
 
 📺 RESOLUTION SPECIFIC:
-• bestvideo[height<=1080]+bestaudio - Best up to 1080p
-• bestvideo[height<=720]+bestaudio - Best up to 720p
-• best[height<=1080] - Single file up to 1080p
+• bv*[height<=1080]+ba/b[height<=1080] - Best up to 1080p with audio
+• bv*[height<=720]+ba/b[height<=720] - Best up to 720p with audio
+• b[height<=1080] - Single file up to 1080p
 
 🎵 AUDIO ONLY:
-• bestaudio[ext=m4a] - Best M4A audio
-• bestaudio[ext=mp3] - Best MP3 audio
+• ba[ext=m4a]/ba - Best M4A audio (fallback to any)
+• ba[ext=mp3]/ba - Best MP3 audio (fallback to any)
 
 ⚙️ ADVANCED:
-• best[ext=mp4] - Best MP4 format only
-• bestvideo[vcodec^=avc1]+bestaudio - H.264 video + best audio
+• b[ext=mp4] - Best MP4 format only
+• bv*[vcodec^=avc1]+ba/b - H.264 video + best audio
 • worst - Lowest quality (for testing)
 
-💡 TIP: Use '+' to merge separate video and audio streams for better quality!
+💡 NEW: Updated format strings use 'bv*+ba' for better quality merging!
+📦 FFmpeg is now installed - high quality video+audio merging available!
 
 See yt-dlp documentation for more format options."""
         
@@ -503,6 +519,61 @@ See yt-dlp documentation for more format options."""
         )
         self.download_thread.start()
     
+    def run_ytdlp_with_tracking(self, ydl_opts, url):
+        """Run yt-dlp download with process tracking for proper termination"""
+        import yt_dlp
+        
+        # Store the original download method
+        original_subprocess_run = subprocess.run
+        
+        def tracked_subprocess_run(*args, **kwargs):
+            """Wrapper for subprocess.run to track processes"""
+            try:
+                # Create process with tracking
+                kwargs['stdout'] = subprocess.PIPE
+                kwargs['stderr'] = subprocess.PIPE
+                process = subprocess.Popen(*args, **kwargs)
+                
+                # Add to our tracking list
+                self.running_processes.append(process)
+                print(f"[GUI DEBUG] Added process {process.pid} to tracking list")
+                
+                # Wait for completion and get results
+                stdout, stderr = process.communicate()
+                
+                # Remove from tracking list when done
+                if process in self.running_processes:
+                    self.running_processes.remove(process)
+                    print(f"[GUI DEBUG] Removed process {process.pid} from tracking list")
+                
+                # Create result object similar to subprocess.run
+                class Result:
+                    def __init__(self, returncode, stdout, stderr):
+                        self.returncode = returncode
+                        self.stdout = stdout
+                        self.stderr = stderr
+                
+                return Result(process.returncode, stdout, stderr)
+                
+            except Exception as e:
+                print(f"[GUI DEBUG] Error in tracked subprocess: {e}")
+                # Remove from tracking if there was an error
+                if 'process' in locals() and process in self.running_processes:
+                    self.running_processes.remove(process)
+                raise
+        
+        # Monkey patch subprocess.run temporarily
+        subprocess.run = tracked_subprocess_run
+        
+        try:
+            # Run the download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                result = ydl.download([url])
+            return result
+        finally:
+            # Restore original subprocess.run
+            subprocess.run = original_subprocess_run
+    
     def download_worker(self, urls):
         """Worker function for downloading (runs in separate thread)"""
         try:
@@ -517,6 +588,13 @@ See yt-dlp documentation for more format options."""
             # Create a custom progress hook
             def progress_hook(d):
                 try:
+                    # Check if download was stopped
+                    if self.download_stopped:
+                        print(f"[DOWNLOAD DEBUG] Download stopped flag detected in progress hook")
+                        # Terminate all processes when stop is detected
+                        self.terminate_all_processes()
+                        return
+                    
                     print(f"[DOWNLOAD DEBUG] Progress hook called:")
                     print(f"  Status: {d.get('status')}")
                     print(f"  Filename: {d.get('filename', 'N/A')}")
@@ -748,18 +826,26 @@ See yt-dlp documentation for more format options."""
                                             'retries': 3,
                                             'fragment_retries': 3,
                                             'extractor_retries': 3,
-                                            # Enhanced quality options
+                                            # Enhanced quality and merging options
                                             'merge_output_format': 'mp4',  # Ensure output is MP4
-                                            'postprocessors': [{
-                                                'key': 'FFmpegVideoConvertor',
-                                                'preferedformat': 'mp4',
-                                            }],
+                                            'postprocessors': [
+                                                {
+                                                    'key': 'FFmpegVideoConvertor',
+                                                    'preferedformat': 'mp4',
+                                                },
+                                                {
+                                                    'key': 'FFmpegMetadata',
+                                                    'add_metadata': True,
+                                                }
+                                            ],
                                             'prefer_ffmpeg': True,  # Use ffmpeg for better quality
                                             'keepvideo': False,  # Remove source files after merge
+                                            'writeinfojson': False,  # Don't write info files
+                                            'writethumbnail': False,  # Don't write thumbnail files
                                         }
                                         
-                                        with yt_dlp.YoutubeDL(ydl_opts) as ydl_playlist:
-                                            ydl_playlist.download([video_url])
+                                        # Use tracked download method
+                                        self.run_ytdlp_with_tracking(ydl_opts, video_url)
                                             
                                         playlist_success += 1
                                         
@@ -907,14 +993,22 @@ See yt-dlp documentation for more format options."""
                             'retries': 3,
                             'fragment_retries': 3,
                             'extractor_retries': 3,
-                            # Enhanced quality options
+                            # Enhanced quality and merging options
                             'merge_output_format': 'mp4',  # Ensure output is MP4
-                            'postprocessors': [{
-                                'key': 'FFmpegVideoConvertor',
-                                'preferedformat': 'mp4',
-                            }],
+                            'postprocessors': [
+                                {
+                                    'key': 'FFmpegVideoConvertor',
+                                    'preferedformat': 'mp4',
+                                },
+                                {
+                                    'key': 'FFmpegMetadata',
+                                    'add_metadata': True,
+                                }
+                            ],
                             'prefer_ffmpeg': True,  # Use ffmpeg for better quality
                             'keepvideo': False,  # Remove source files after merge
+                            'writeinfojson': False,  # Don't write info files
+                            'writethumbnail': False,  # Don't write thumbnail files
                         }
                         
                         # Update status to downloading
@@ -926,8 +1020,8 @@ See yt-dlp documentation for more format options."""
                         }))
                         
                         print(f"[DOWNLOAD DEBUG] Starting yt-dlp download...")
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([url])
+                        # Use tracked download method
+                        self.run_ytdlp_with_tracking(ydl_opts, url)
                         print(f"[DOWNLOAD DEBUG] yt-dlp download completed")
                             
                         results[url] = True
@@ -1017,18 +1111,84 @@ See yt-dlp documentation for more format options."""
     
     def stop_download(self):
         """Stop the download process"""
+        print("[GUI DEBUG] Stop download requested")
         self.download_stopped = True
         self.overall_progress_bar.stop()
         self.current_progress_bar.stop()
+        self.overall_progress_var.set("Stopping download...")
+        self.current_progress_var.set("Stopping...")
+        self.log_message("Stopping download...", "orange")
+        
+        # Terminate all running processes
+        self.terminate_all_processes()
+        
+        # Wait for thread to finish gracefully (with timeout)
+        if hasattr(self, 'download_thread') and self.download_thread and self.download_thread.is_alive():
+            print("[GUI DEBUG] Waiting for download thread to finish...")
+            self.download_thread.join(timeout=3.0)  # Wait up to 3 seconds
+            
+            if self.download_thread.is_alive():
+                print("[GUI DEBUG] Download thread still running after timeout")
+                # Force thread termination if needed (not recommended but as last resort)
+        
+        # Update UI
         self.overall_progress_var.set("Download stopped")
         self.current_progress_var.set("Stopped")
         self.download_button.config(state="normal")
         self.stop_button.config(state="disabled")
-        self.log_message("Download stopped by user", "orange")
-        
-        # Try to terminate the download thread gracefully
-        if hasattr(self, 'download_thread') and self.download_thread.is_alive():
-            print("[GUI DEBUG] Requesting download thread to stop...")
+        self.log_message("Download stopped by user", "red")
+        print("[GUI DEBUG] Download stop completed")
+    
+    def terminate_all_processes(self):
+        """Terminate all running yt-dlp processes"""
+        try:
+            print(f"[GUI DEBUG] Terminating {len(self.running_processes)} processes...")
+            
+            # First, try to terminate processes gracefully
+            for proc in self.running_processes[:]:  # Create a copy to iterate
+                try:
+                    if proc.poll() is None:  # Process is still running
+                        print(f"[GUI DEBUG] Terminating process PID: {proc.pid}")
+                        proc.terminate()
+                except Exception as e:
+                    print(f"[GUI DEBUG] Error terminating process: {e}")
+            
+            # Wait a moment for graceful termination
+            import time
+            time.sleep(1)
+            
+            # Force kill any remaining processes
+            for proc in self.running_processes[:]:
+                try:
+                    if proc.poll() is None:  # Still running
+                        print(f"[GUI DEBUG] Force killing process PID: {proc.pid}")
+                        proc.kill()
+                        proc.wait(timeout=1)
+                except Exception as e:
+                    print(f"[GUI DEBUG] Error force killing process: {e}")
+            
+            # Clear the process list
+            self.running_processes.clear()
+            
+            # Additionally, try to kill any yt-dlp processes that might be running
+            if PSUTIL_AVAILABLE:
+                try:
+                    for process in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        try:
+                            cmdline = process.info['cmdline']
+                            if cmdline and any('yt-dlp' in str(arg) for arg in cmdline):
+                                print(f"[GUI DEBUG] Found and terminating yt-dlp process: {process.info['pid']}")
+                                psutil.Process(process.info['pid']).terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except Exception as e:
+                    print(f"[GUI DEBUG] Error searching for yt-dlp processes: {e}")
+            else:
+                print("[GUI DEBUG] psutil not available, cannot search for additional yt-dlp processes")
+                
+        except Exception as e:
+            print(f"[GUI DEBUG] Error in terminate_all_processes: {e}")
+            self.running_processes.clear()  # Clear the list anyway
     
     def update_messages(self):
         """Process messages from download thread"""
