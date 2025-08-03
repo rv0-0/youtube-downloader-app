@@ -1,0 +1,16 @@
+# Demo YouTube URLs File
+# This is how you can prepare URLs for batch downloading
+
+# Single videos (these are example URLs - replace with real ones):
+# https://www.youtube.com/watch?v=dQw4w9WgXcQ
+# https://youtu.be/jNQXAC9IVRw
+
+# Playlists (these are example URLs - replace with real ones):
+# https://www.youtube.com/playlist?list=PLrAXtmRdnEQy6nuLvzey9DAEdGjNMi56M
+
+# Mix of both:
+# https://www.youtube.com/watch?v=ScMzIvxBSi4
+# https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi
+
+# To use this file:
+# python batch_download.py demo_urls.txt
