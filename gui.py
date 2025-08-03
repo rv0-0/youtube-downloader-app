@@ -27,19 +27,21 @@ class YouTubeDownloaderGUI:
         # Downloader instance
         self.downloader = None
         self.download_path = "Downloads"
+        self.download_stopped = False  # Flag to track if download was stopped
         
         # Video progress tracking
         self.video_progress = {}
         self.current_video_index = 0
         self.total_videos = 0
         
-        # Quality options
+        # Quality options - Updated for better quality
         self.quality_options = {
-            "Best Quality (4K/1440p/1080p)": "best",
-            "High Quality (1080p max)": "best[height<=1080]",
-            "Medium Quality (720p max)": "best[height<=720]", 
-            "Low Quality (480p max)": "best[height<=480]",
-            "Audio Only (Best)": "bestaudio/best",
+            "Best Quality (4K/1440p/1080p)": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+            "High Quality (1080p max)": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+            "Medium Quality (720p max)": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]", 
+            "Low Quality (480p max)": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
+            "Premium Quality (VP9+Opus)": "bestvideo[vcodec^=vp9]+bestaudio[acodec^=opus]/bestvideo+bestaudio/best",
+            "Audio Only (Best)": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
             "Custom Format": "custom"
         }
         
@@ -91,10 +93,10 @@ class YouTubeDownloaderGUI:
         quality_frame.columnconfigure(1, weight=1)
         
         ttk.Label(quality_frame, text="Quality:").grid(row=0, column=0, sticky=tk.W)
-        self.quality_var = tk.StringVar(value="High Quality (1080p max)")
+        self.quality_var = tk.StringVar(value="Best Quality (4K/1440p/1080p)")
         quality_combo = ttk.Combobox(quality_frame, textvariable=self.quality_var, 
                                    values=list(self.quality_options.keys()), 
-                                   state="readonly", width=30)
+                                   state="readonly", width=35)
         quality_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
         quality_combo.bind('<<ComboboxSelected>>', self.on_quality_change)
         
@@ -104,7 +106,7 @@ class YouTubeDownloaderGUI:
         self.custom_format_frame.columnconfigure(1, weight=1)
         
         ttk.Label(self.custom_format_frame, text="Custom Format:").grid(row=0, column=0, sticky=tk.W)
-        self.custom_format_var = tk.StringVar(value="best[height<=1080]/best")
+        self.custom_format_var = tk.StringVar(value="bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
         self.custom_format_entry = ttk.Entry(self.custom_format_frame, textvariable=self.custom_format_var)
         self.custom_format_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
         
@@ -241,15 +243,27 @@ class YouTubeDownloaderGUI:
     def show_format_help(self):
         """Show help dialog for custom format"""
         help_text = """Custom Format Examples:
-        
-• best - Best quality available
-• best[height<=1080] - Best up to 1080p
-• best[height<=720] - Best up to 720p
-• worst - Lowest quality
-• bestaudio - Audio only
-• best[ext=mp4] - Best MP4 format
-• best[vcodec^=avc1] - Best H.264 format
-• bestvideo+bestaudio - Merge best video and audio
+
+🏆 BEST QUALITY FORMATS:
+• bestvideo[ext=mp4]+bestaudio[ext=m4a] - Best MP4 video + M4A audio (recommended)
+• bestvideo+bestaudio - Best video and audio streams merged
+• bestvideo[vcodec^=vp9]+bestaudio[acodec^=opus] - VP9 video + Opus audio (premium quality)
+
+📺 RESOLUTION SPECIFIC:
+• bestvideo[height<=1080]+bestaudio - Best up to 1080p
+• bestvideo[height<=720]+bestaudio - Best up to 720p
+• best[height<=1080] - Single file up to 1080p
+
+🎵 AUDIO ONLY:
+• bestaudio[ext=m4a] - Best M4A audio
+• bestaudio[ext=mp3] - Best MP3 audio
+
+⚙️ ADVANCED:
+• best[ext=mp4] - Best MP4 format only
+• bestvideo[vcodec^=avc1]+bestaudio - H.264 video + best audio
+• worst - Lowest quality (for testing)
+
+💡 TIP: Use '+' to merge separate video and audio streams for better quality!
 
 See yt-dlp documentation for more format options."""
         
@@ -261,7 +275,7 @@ See yt-dlp documentation for more format options."""
         if quality_name == "Custom Format":
             return self.custom_format_var.get()
         else:
-            return self.quality_options.get(quality_name, "best[height<=1080]")
+            return self.quality_options.get(quality_name, "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
     
     def clear_video_progress(self):
         """Clear the video progress tree"""
@@ -277,6 +291,11 @@ See yt-dlp documentation for more format options."""
         print(f"  Index: {index}")
         print(f"  Title: {title}")
         print(f"  URL: {url}")
+        
+        # Check if this URL is already being tracked (avoid duplicates)
+        if url in self.video_progress:
+            print(f"[GUI DEBUG] URL already exists in progress tracking, skipping: {url}")
+            return self.video_progress[url]["item_id"]
         
         # For playlist videos, don't use the total_videos in the display index
         # as it may not be updated yet when playlist videos are being added
@@ -322,35 +341,38 @@ See yt-dlp documentation for more format options."""
         else:
             # Check for URL variants (with/without parameters, different formats)
             print(f"[GUI DEBUG] No exact URL match found. Checking variants...")
-            print(f"[GUI DEBUG] Available URLs in tracking:")
+            print(f"[GUI DEBUG] Available URLs in tracking: {len(self.video_progress)} total")
             
             matched_url = None
-            for i, key in enumerate(self.video_progress.keys()):
-                print(f"  {i+1}: {key}")
+            for key in self.video_progress.keys():
                 # Try to match by video ID (extract from URL)
-                if 'youtube.com/watch?v=' in url and 'youtube.com/watch?v=' in key:
-                    url_id = url.split('watch?v=')[1].split('&')[0]
-                    key_id = key.split('watch?v=')[1].split('&')[0]
-                    if url_id == key_id:
-                        matched_url = key
-                        print(f"[GUI DEBUG] Found URL match by video ID: {url_id}")
-                        break
-                elif 'youtu.be/' in url or 'youtu.be/' in key:
-                    # Handle youtu.be short URLs
-                    if 'youtu.be/' in url:
-                        url_id = url.split('youtu.be/')[1].split('?')[0]
-                    else:
+                try:
+                    if 'youtube.com/watch?v=' in url and 'youtube.com/watch?v=' in key:
                         url_id = url.split('watch?v=')[1].split('&')[0]
-                    
-                    if 'youtu.be/' in key:
-                        key_id = key.split('youtu.be/')[1].split('?')[0]
-                    else:
                         key_id = key.split('watch?v=')[1].split('&')[0]
-                    
-                    if url_id == key_id:
-                        matched_url = key
-                        print(f"[GUI DEBUG] Found URL match by video ID (youtu.be): {url_id}")
-                        break
+                        if url_id == key_id:
+                            matched_url = key
+                            print(f"[GUI DEBUG] Found URL match by video ID: {url_id}")
+                            break
+                    elif 'youtu.be/' in url or 'youtu.be/' in key:
+                        # Handle youtu.be short URLs
+                        if 'youtu.be/' in url:
+                            url_id = url.split('youtu.be/')[1].split('?')[0]
+                        else:
+                            url_id = url.split('watch?v=')[1].split('&')[0]
+                        
+                        if 'youtu.be/' in key:
+                            key_id = key.split('youtu.be/')[1].split('?')[0]
+                        else:
+                            key_id = key.split('watch?v=')[1].split('&')[0]
+                        
+                        if url_id == key_id:
+                            matched_url = key
+                            print(f"[GUI DEBUG] Found URL match by video ID (youtu.be): {url_id}")
+                            break
+                except Exception as e:
+                    print(f"[GUI DEBUG] Error parsing URL {key}: {e}")
+                    continue
             
             if matched_url:
                 url = matched_url  # Use the matched URL for the rest of the function
@@ -455,6 +477,7 @@ See yt-dlp documentation for more format options."""
         # Clear previous data
         self.log_text.delete(1.0, tk.END)
         self.clear_video_progress()
+        self.download_stopped = False  # Reset the stop flag
         
         # Initialize progress tracking
         self.total_videos = len(urls)
@@ -507,18 +530,23 @@ See yt-dlp documentation for more format options."""
                         total = d.get('total_bytes') or d.get('total_bytes_estimate')
                         filename = d.get('filename', '')
                         
+                        # Skip progress updates for audio fragments and subtitle files
+                        if filename:
+                            if '.srt' in filename or '.vtt' in filename:
+                                print(f"[DOWNLOAD DEBUG] Subtitle download detected - skipping progress update")
+                                return
+                            elif any(f'.f{i}.' in filename for i in range(100, 999)) and ('.m4a' in filename or '.webm' in filename):
+                                print(f"[DOWNLOAD DEBUG] Audio fragment download detected - skipping progress update")
+                                return
+                        
                         # Calculate progress - handle missing total bytes
                         if total and total > 0:
                             percent = (downloaded / total) * 100
                             print(f"[DOWNLOAD DEBUG] Calculated progress: {percent:.1f}% ({downloaded}/{total})")
                         else:
-                            # For subtitle files and streams without total size, show activity
-                            if '.srt' in filename or '.vtt' in filename:
-                                percent = 75  # Show 75% for subtitle downloads to indicate activity
-                                print(f"[DOWNLOAD DEBUG] Subtitle download detected - using 75% progress")
-                            else:
-                                percent = 50  # Show 50% for unknown size video downloads
-                                print(f"[DOWNLOAD DEBUG] Unknown size download - using 50% progress")
+                            # For streams without total size, show activity
+                            percent = 50  # Show 50% for unknown size video downloads
+                            print(f"[DOWNLOAD DEBUG] Unknown size download - using 50% progress")
                             
                         speed = d.get('speed', 0)
                         eta = d.get('eta', 0)
@@ -559,17 +587,17 @@ See yt-dlp documentation for more format options."""
                         else:
                             display_filename = 'Processing...'
                         
-                        self.message_queue.put(("current_progress", {
-                            "percent": 100,
-                            "speed": 0,
-                            "eta": 0,
-                            "filename": display_filename
-                        }))
-                        
-                        # Only update video progress to "Processing" for main video files, not subtitles
+                        # Only update video progress to "Processing" for main video files, not subtitles or audio fragments
                         if self.current_downloading_url:
                             if '.srt' in filename or '.vtt' in filename:
                                 print(f"[DOWNLOAD DEBUG] Subtitle finished - not updating video status")
+                                # Don't update progress for subtitles
+                            elif '.m4a' in filename or '.webm' in filename or '.mp3' in filename:
+                                print(f"[DOWNLOAD DEBUG] Audio track finished - not updating video status")
+                                # Don't update progress for audio tracks during merging
+                            elif any(f'.f{i}.' in filename for i in range(100, 999)):
+                                print(f"[DOWNLOAD DEBUG] Video/Audio fragment finished - not updating video status")
+                                # Don't update progress for individual fragments during merging
                             else:
                                 print(f"[DOWNLOAD DEBUG] Main video finished - updating to Processing")
                                 self.message_queue.put(("video_progress", {
@@ -578,12 +606,12 @@ See yt-dlp documentation for more format options."""
                                     "status": "Processing"
                                 }))
                                 
-                                # Also update the current progress to show completion
+                                # Update current progress to show processing
                                 self.message_queue.put(("current_progress", {
                                     "percent": 100,
                                     "speed": 0,
                                     "eta": 0,
-                                    "filename": "Complete"
+                                    "filename": "Processing..."
                                 }))
                             
                 except Exception as e:
@@ -593,6 +621,12 @@ See yt-dlp documentation for more format options."""
             # Process each URL
             results = {}
             for i, url in enumerate(urls, 1):
+                # Check if download was stopped
+                if self.download_stopped:
+                    print(f"[DOWNLOAD DEBUG] Download stopped by user")
+                    self.message_queue.put(("error", "Download was stopped by user"))
+                    return
+                
                 print(f"\n[DOWNLOAD DEBUG] ===== Processing URL {i}/{len(urls)} =====")
                 print(f"[DOWNLOAD DEBUG] URL: {url}")
                 
@@ -616,6 +650,8 @@ See yt-dlp documentation for more format options."""
                         'quiet': True,
                         'no_warnings': True,
                         'extract_flat': False,
+                        'ignoreerrors': True,  # Continue processing even if some videos fail
+                        'skip_unavailable_fragments': True,  # Skip unavailable content
                     }
                     
                     with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
@@ -628,26 +664,58 @@ See yt-dlp documentation for more format options."""
                             playlist_title = info.get('title', f'Playlist {i}')
                             entries = [e for e in info['entries'] if e is not None]
                             
-                            print(f"[DOWNLOAD DEBUG] Playlist: {playlist_title}, {len(entries)} videos")
-                            self.message_queue.put(("log", f"Found playlist: {playlist_title} with {len(entries)} videos"))
+                            # Filter out None entries and private/unavailable videos
+                            available_entries = []
+                            unavailable_count = 0
+                            for entry in info['entries']:
+                                if entry is None:
+                                    unavailable_count += 1
+                                else:
+                                    available_entries.append(entry)
+                            
+                            total_entries = len(info['entries'])
+                            print(f"[DOWNLOAD DEBUG] Playlist: {playlist_title}")
+                            print(f"[DOWNLOAD DEBUG] Total entries: {total_entries}, Available: {len(available_entries)}, Unavailable: {unavailable_count}")
+                            
+                            if unavailable_count > 0:
+                                self.message_queue.put(("log", f"Found playlist: {playlist_title} with {total_entries} videos ({unavailable_count} private/unavailable)"))
+                            else:
+                                self.message_queue.put(("log", f"Found playlist: {playlist_title} with {len(available_entries)} videos"))
                             
                             # Update the main playlist entry
+                            playlist_status = f"{len(available_entries)} videos"
+                            if unavailable_count > 0:
+                                playlist_status += f" ({unavailable_count} private/unavailable)"
+                            
                             self.message_queue.put(("video_progress", {
                                 "url": url,
                                 "title": f"📂 {playlist_title}",
                                 "status": "Processing playlist",
                                 "progress": 0,
-                                "quality": f"{len(entries)} videos"
+                                "quality": playlist_status
                             }))
                             
                             # Process each video in the playlist
                             playlist_success = 0
-                            for j, entry in enumerate(entries):
+                            playlist_failed = 0
+                            processed_videos = set()  # Track processed videos to avoid duplicates
+                            for j, entry in enumerate(available_entries):
+                                # Check if download was stopped
+                                if self.download_stopped:
+                                    print(f"[DOWNLOAD DEBUG] Playlist download stopped by user")
+                                    break
+                                
                                 if entry:
                                     video_title = entry.get('title', f'Video {j+1}')
                                     video_url = entry.get('webpage_url') or entry.get('url', f'{url}#{j}')
                                     
-                                    # Add to tracking - notify GUI about the new total
+                                    # Skip if already processed
+                                    if video_url in processed_videos:
+                                        print(f"[DOWNLOAD DEBUG] Skipping duplicate video: {video_url}")
+                                        continue
+                                    processed_videos.add(video_url)
+                                    
+                                    # Add to tracking - notify GUI about the new video
                                     self.message_queue.put(("add_playlist_video", {
                                         "index": f"{i}.{j+1}",
                                         "title": f"  └ {video_title}",
@@ -664,7 +732,7 @@ See yt-dlp documentation for more format options."""
                                             "progress": 0
                                         }))
                                         
-                                        # Download with progress tracking
+                                        # Download with progress tracking - Enhanced quality options
                                         ydl_opts = {
                                             'format': selected_format,
                                             'outtmpl': str(Path(self.download_path) / 'Playlists' / f'{playlist_title}' / f'{j+1:02d} - %(title)s.%(ext)s'),
@@ -680,6 +748,14 @@ See yt-dlp documentation for more format options."""
                                             'retries': 3,
                                             'fragment_retries': 3,
                                             'extractor_retries': 3,
+                                            # Enhanced quality options
+                                            'merge_output_format': 'mp4',  # Ensure output is MP4
+                                            'postprocessors': [{
+                                                'key': 'FFmpegVideoConvertor',
+                                                'preferedformat': 'mp4',
+                                            }],
+                                            'prefer_ffmpeg': True,  # Use ffmpeg for better quality
+                                            'keepvideo': False,  # Remove source files after merge
                                         }
                                         
                                         with yt_dlp.YoutubeDL(ydl_opts) as ydl_playlist:
@@ -696,36 +772,69 @@ See yt-dlp documentation for more format options."""
                                         }))
                                         
                                     except Exception as video_error:
+                                        playlist_failed += 1
+                                        error_msg = str(video_error)
+                                        
+                                        # Provide user-friendly error messages
+                                        if "Private video" in error_msg:
+                                            friendly_error = "Private/Restricted"
+                                        elif "Video unavailable" in error_msg:
+                                            friendly_error = "Unavailable"
+                                        elif "Sign in" in error_msg:
+                                            friendly_error = "Login Required"
+                                        else:
+                                            friendly_error = "Failed"
+                                        
                                         self.message_queue.put(("video_progress", {
                                             "url": video_url,
-                                            "status": "Failed",
+                                            "status": friendly_error,
                                             "progress": 0
                                         }))
-                                        self.message_queue.put(("log", f"Failed to download playlist video {j+1}: {video_error}"))
+                                        self.message_queue.put(("log", f"⚠️  Playlist video {j+1} ({video_title[:30]}...): {friendly_error}"))
                                     
                                     # Update playlist progress
-                                    playlist_progress = ((j + 1) / len(entries)) * 100
+                                    playlist_progress = ((j + 1) / len(available_entries)) * 100
                                     self.message_queue.put(("video_progress", {
                                         "url": url,
                                         "progress": playlist_progress,
-                                        "status": f"Processing ({j+1}/{len(entries)})"
+                                        "status": f"Processing ({j+1}/{len(available_entries)})"
                                     }))
                             
                             # Final playlist status
-                            if playlist_success == len(entries):
+                            total_processed = playlist_success + playlist_failed
+                            if playlist_success == len(available_entries):
                                 self.message_queue.put(("video_progress", {
                                     "url": url,
                                     "status": "Completed",
                                     "progress": 100
                                 }))
                                 results[url] = True
-                            else:
+                            elif playlist_success > 0:
+                                status_text = f"Partial ({playlist_success}/{len(available_entries)})"
+                                if unavailable_count > 0:
+                                    status_text += f" +{unavailable_count} unavailable"
                                 self.message_queue.put(("video_progress", {
                                     "url": url,
-                                    "status": f"Partial ({playlist_success}/{len(entries)})",
+                                    "status": status_text,
                                     "progress": 100
                                 }))
-                                results[url] = playlist_success > 0
+                                results[url] = True  # Consider partial success as success
+                            else:
+                                status_text = "Failed"
+                                if unavailable_count > 0:
+                                    status_text += f" ({unavailable_count} unavailable)"
+                                self.message_queue.put(("video_progress", {
+                                    "url": url,
+                                    "status": status_text,
+                                    "progress": 100
+                                }))
+                                results[url] = False
+                            
+                            # Log summary
+                            if playlist_success > 0:
+                                self.message_queue.put(("log", f"✓ Playlist completed: {playlist_success} successful, {playlist_failed} failed"))
+                            else:
+                                self.message_queue.put(("log", f"✗ Playlist failed: No videos could be downloaded"))
                                 
                         else:  # Single video
                             print(f"[DOWNLOAD DEBUG] Detected single video")
@@ -735,16 +844,38 @@ See yt-dlp documentation for more format options."""
                             print(f"[DOWNLOAD DEBUG] Video title: {video_title}")
                             print(f"[DOWNLOAD DEBUG] Available formats: {len(formats)}")
                             
-                            # Find quality info
+                            # Find quality info - Enhanced to show more details
                             quality_info = "Unknown"
                             best_height = 0
+                            best_fps = 0
+                            video_codec = "Unknown"
+                            audio_codec = "Unknown"
+                            
                             for fmt in formats:
                                 height = fmt.get('height', 0)
+                                fps = fmt.get('fps', 0) or 30
+                                vcodec = fmt.get('vcodec', 'none')
+                                acodec = fmt.get('acodec', 'none')
+                                
                                 if height and height > best_height:
                                     best_height = height
-                                    quality_info = f"{height}p"
+                                    best_fps = fps
+                                    if vcodec != 'none':
+                                        video_codec = vcodec
+                                    if acodec != 'none':
+                                        audio_codec = acodec
+                            
+                            if best_height > 0:
+                                quality_info = f"{best_height}p"
+                                if best_fps > 30:
+                                    quality_info += f"@{best_fps}fps"
+                                if video_codec != "Unknown" and "vp9" in video_codec.lower():
+                                    quality_info += " (VP9)"
+                                elif video_codec != "Unknown" and "avc1" in video_codec.lower():
+                                    quality_info += " (H.264)"
                             
                             print(f"[DOWNLOAD DEBUG] Best quality: {quality_info}")
+                            print(f"[DOWNLOAD DEBUG] Video codec: {video_codec}, Audio codec: {audio_codec}")
                             
                             # Update video info with title and quality
                             video_update_data = {
@@ -760,7 +891,7 @@ See yt-dlp documentation for more format options."""
                     # For single videos, download now
                     if 'entries' not in info:
                         print(f"[DOWNLOAD DEBUG] Starting single video download")
-                        # Download with progress tracking
+                        # Download with progress tracking - Enhanced quality options
                         ydl_opts = {
                             'format': selected_format,
                             'outtmpl': str(Path(self.download_path) / 'Single Videos' / '%(title)s.%(ext)s'),
@@ -776,6 +907,14 @@ See yt-dlp documentation for more format options."""
                             'retries': 3,
                             'fragment_retries': 3,
                             'extractor_retries': 3,
+                            # Enhanced quality options
+                            'merge_output_format': 'mp4',  # Ensure output is MP4
+                            'postprocessors': [{
+                                'key': 'FFmpegVideoConvertor',
+                                'preferedformat': 'mp4',
+                            }],
+                            'prefer_ffmpeg': True,  # Use ffmpeg for better quality
+                            'keepvideo': False,  # Remove source files after merge
                         }
                         
                         # Update status to downloading
@@ -801,6 +940,14 @@ See yt-dlp documentation for more format options."""
                             "progress": 100
                         }))
                         
+                        # Also update current progress to show completion
+                        self.message_queue.put(("current_progress", {
+                            "percent": 100,
+                            "speed": 0,
+                            "eta": 0,
+                            "filename": "Complete"
+                        }))
+                        
                         self.message_queue.put(("log", f"✓ [{i}/{len(urls)}] Completed: {video_title}"))
                     
                 except Exception as e:
@@ -808,14 +955,34 @@ See yt-dlp documentation for more format options."""
                     results[url] = False
                     error_msg = str(e)
                     
+                    # Provide user-friendly error messages
+                    if "Private video" in error_msg:
+                        friendly_error = "❌ Private/Restricted content - Authentication required"
+                        status = "Private/Restricted"
+                    elif "Video unavailable" in error_msg:
+                        friendly_error = "❌ Video unavailable or deleted"
+                        status = "Unavailable"
+                    elif "Sign in" in error_msg:
+                        friendly_error = "❌ Login required for this content"
+                        status = "Login Required"
+                    elif "cookies" in error_msg.lower():
+                        friendly_error = "❌ Authentication required (cookies needed)"
+                        status = "Auth Required"
+                    elif "network" in error_msg.lower() or "connection" in error_msg.lower():
+                        friendly_error = "❌ Network connection error"
+                        status = "Network Error"
+                    else:
+                        friendly_error = f"❌ Download failed: {error_msg[:100]}..."
+                        status = "Failed"
+                    
                     # Update video status to failed
                     self.message_queue.put(("video_progress", {
                         "url": url,
-                        "status": "Failed",
+                        "status": status,
                         "progress": 0
                     }))
                     
-                    self.message_queue.put(("log", f"✗ [{i}/{len(urls)}] Failed: {error_msg}"))
+                    self.message_queue.put(("log", f"✗ [{i}/{len(urls)}] {friendly_error}"))
                 
                 # Update overall progress
                 print(f"[DOWNLOAD DEBUG] Updating overall progress")
@@ -830,12 +997,18 @@ See yt-dlp documentation for more format options."""
             print(f"[DOWNLOAD DEBUG] Failed: {failed}")
             print(f"[DOWNLOAD DEBUG] Total: {len(urls)}")
             
+            # Final overall progress update
+            self.message_queue.put(("overall_progress", f"Finalizing... {successful}/{len(urls)} completed"))
+            
             self.message_queue.put(("complete", {
                 "successful": successful,
                 "failed": failed,
                 "total": len(urls)
             }))
             
+        except KeyboardInterrupt:
+            print(f"[DOWNLOAD DEBUG] Download interrupted by user")
+            self.message_queue.put(("error", "Download was interrupted by user"))
         except Exception as e:
             print(f"[DOWNLOAD DEBUG CRITICAL ERROR] {e}")
             import traceback
@@ -844,6 +1017,7 @@ See yt-dlp documentation for more format options."""
     
     def stop_download(self):
         """Stop the download process"""
+        self.download_stopped = True
         self.overall_progress_bar.stop()
         self.current_progress_bar.stop()
         self.overall_progress_var.set("Download stopped")
@@ -851,6 +1025,10 @@ See yt-dlp documentation for more format options."""
         self.download_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.log_message("Download stopped by user", "orange")
+        
+        # Try to terminate the download thread gracefully
+        if hasattr(self, 'download_thread') and self.download_thread.is_alive():
+            print("[GUI DEBUG] Requesting download thread to stop...")
     
     def update_messages(self):
         """Process messages from download thread"""
@@ -928,17 +1106,31 @@ See yt-dlp documentation for more format options."""
                     
                     # Show completion message
                     if data['failed'] > 0:
-                        messagebox.showwarning(
-                            "Download Complete",
-                            f"Download completed with some failures:\n"
-                            f"Successful: {data['successful']}\n"
-                            f"Failed: {data['failed']}\n"
+                        # Check if we have authentication-related failures
+                        auth_issues = any(
+                            video["status"] in ["Private/Restricted", "Login Required", "Auth Required"]
+                            for video in self.video_progress.values()
+                        )
+                        
+                        failure_msg = (
+                            f"Download completed with some issues:\n"
+                            f"✅ Successful: {data['successful']}\n"
+                            f"❌ Failed: {data['failed']}\n\n"
                             f"Check the log and individual video status for details."
                         )
+                        
+                        if auth_issues:
+                            failure_msg += (
+                                f"\n\n💡 Tip: Some videos are private or require login. "
+                                f"For private playlists, make sure you're logged into YouTube "
+                                f"in your browser and the playlist is public or you have access."
+                            )
+                        
+                        messagebox.showwarning("Download Complete", failure_msg)
                     else:
                         messagebox.showinfo(
                             "Download Complete",
-                            f"All {data['successful']} downloads completed successfully!"
+                            f"🎉 All {data['successful']} downloads completed successfully!"
                         )
                 elif message_type == "error":
                     print(f"[GUI DEBUG] Error message received: {data}")
